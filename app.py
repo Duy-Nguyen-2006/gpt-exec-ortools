@@ -1,74 +1,53 @@
-# app.py
-import os
-import tempfile
-import uuid
-import subprocess
-from datetime import datetime
-from typing import Optional
-
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
+import subprocess, tempfile, os
 
-SECRET = os.getenv("SECRET_KEY", "")  # set trên Zeabur
-
-app = FastAPI(title="GPT Exec OR-Tools", version="1.0.0")
+app = FastAPI()
 
 class ExecRequest(BaseModel):
-    language: str = "python"
+    language: str
     code: str
-    timeout_sec: Optional[int] = 20  # server sẽ giới hạn tối đa 30s
 
-@app.get("/healthz")
-def healthz():
-    return {"ok": True, "time": datetime.utcnow().isoformat() + "Z"}
+@app.get("/")
+def root():
+    return {"status": "ok"}
 
 @app.post("/execute")
 def execute(req: ExecRequest, auth: str = Header(default="")):
-    # 1) Auth kiểm tra khóa
-    if not SECRET or auth != SECRET:
-        raise HTTPException(status_code=401, detail="Sai hoặc thiếu API key (header 'auth')")
+    # kiểm tra key
+    if auth != os.environ.get("SECRET_KEY", "YOUR_SECRET_KEY"):
+        raise HTTPException(status_code=401, detail="Sai API key")
 
-    # 2) Chỉ cho Python
-    if req.language.lower() != "python":
-        raise HTTPException(status_code=400, detail="Chỉ hỗ trợ language='python'")
+    if req.language != "python":
+        raise HTTPException(status_code=400, detail="Chỉ hỗ trợ Python")
 
-    # 3) Ghi code ra file tạm
-    file_id = uuid.uuid4().hex
-    path = os.path.join(tempfile.gettempdir(), f"exec_{file_id}.py")
-    with open(path, "w", encoding="utf-8") as f:
+    # ghi code ra file tạm và chạy
+    with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as f:
         f.write(req.code)
+        path = f.name
 
-    # 4) Chạy code với timeout
-    # Lưu ý: Đây là môi trường sandbox cơ bản (timeout). Không cho chạy lâu.
-    # Nếu code nặng hãy tối ưu/giới hạn trong GPT.
-    t = min(max(1, req.timeout_sec or 1), 300)  # 1..30s
     try:
+        # timeout = 90s (1 phút 30 giây)
         result = subprocess.run(
             ["python", path],
             capture_output=True,
             text=True,
-            timeout=t,
-            check=False,
+            timeout=90
         )
         return {
             "ok": result.returncode == 0,
-            "returncode": result.returncode,
             "stdout": result.stdout,
-            "stderr": result.stderr,
-            "ran_at": datetime.utcnow().isoformat() + "Z",
-            "time_limit_sec": t,
+            "stderr": result.stderr
         }
-    except subprocess.TimeoutExpired as e:
-        return {
-            "ok": False,
-            "returncode": None,
-            "stdout": e.stdout or "",
-            "stderr": f"TIMEOUT after {t}s",
-            "ran_at": datetime.utcnow().isoformat() + "Z",
-            "time_limit_sec": t,
-        }
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=408, detail="Code chạy quá 90s, bị dừng.")
     finally:
         try:
             os.remove(path)
-        except Exception:
+        except:
             pass
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8080))
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=port)
