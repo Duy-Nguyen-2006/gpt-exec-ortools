@@ -4,18 +4,17 @@ import subprocess, tempfile, os
 
 app = FastAPI()
 
+# 🔑 Secret key cố định
+SECRET_KEY = "MY_SUPER_SECRET_KEY_2025"
+
 class ExecRequest(BaseModel):
     language: str
     code: str
 
-@app.get("/")
-def root():
-    return {"status": "ok"}
-
 @app.post("/execute")
 def execute(req: ExecRequest, auth: str = Header(default="")):
     # kiểm tra key
-    if auth != os.environ.get("SECRET_KEY", "YOUR_SECRET_KEY"):
+    if auth != SECRET_KEY:
         raise HTTPException(status_code=401, detail="Sai API key")
 
     if req.language != "python":
@@ -27,27 +26,19 @@ def execute(req: ExecRequest, auth: str = Header(default="")):
         path = f.name
 
     try:
-        # timeout = 90s (1 phút 30 giây)
         result = subprocess.run(
             ["python", path],
             capture_output=True,
             text=True,
-            timeout=90
+            timeout=90   # Timeout 90 giây
         )
         return {
             "ok": result.returncode == 0,
             "stdout": result.stdout,
             "stderr": result.stderr
         }
-    except subprocess.TimeoutExpired:
-        raise HTTPException(status_code=408, detail="Code chạy quá 90s, bị dừng.")
     finally:
         try:
             os.remove(path)
         except:
             pass
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8080))
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=port)
